@@ -1,0 +1,451 @@
+"use client";
+
+import dynamic from "next/dynamic";
+import { useEffect, useMemo, useState } from "react";
+
+const FormDraft = dynamic(() => import("@/components/FormDraft").then((mod) => mod.FormDraft), { ssr: false });
+import { INDIAN_STATES } from "@/lib/extract";
+import { schemes } from "@/lib/schemes";
+import type { Answer, Profile } from "@/lib/types";
+
+type Tab = "chat" | "form" | "schemes" | "draft";
+
+interface Turn {
+  role: "user" | "bot";
+  text: string;
+  answer?: Answer;
+}
+
+const EMPTY: Profile = {};
+
+const SUGGESTIONS = [
+  "मुझे किसान के लिए कौन सी योजना मिलेगी?",
+  "बुढ़ापे की पेंशन कैसे मिलती है?",
+  "बेटी के लिए सुकन्या समृद्धि",
+  "गैस कनेक्शन चाहिए",
+];
+
+export function SaathiApp() {
+  const [tab, setTab] = useState<Tab>("chat");
+  const [profile, setProfile] = useState<Profile>(EMPTY);
+  const [draftScheme, setDraftScheme] = useState("pm-kisan");
+  const [text, setText] = useState("");
+  const [listening, setListening] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [mode, setMode] = useState("local");
+  const [english, setEnglish] = useState(false);
+  const [turns, setTurns] = useState<Turn[]>([
+    {
+      role: "bot",
+      text: "नमस्ते। मैं सरकारी साथी हूँ। हिन्दी या हिंग्लिश में योजना पूछें, या माइक दबाएँ। मैं स्रोत के साथ जवाब दूँगा। आवेदन मैं जमा नहीं करता।",
+    },
+  ]);
+
+  useEffect(() => {
+    const saved = window.localStorage.getItem("saathi-profile");
+    if (saved) {
+      try {
+        setProfile(JSON.parse(saved) as Profile);
+      } catch {
+        /* keep empty */
+      }
+    }
+    fetch("/api/health")
+      .then((response) => response.json())
+      .then((data: { mode?: string }) => setMode(data.mode ?? "local"))
+      .catch(() => setMode("local"));
+  }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem("saathi-profile", JSON.stringify(profile));
+  }, [profile]);
+
+  const latest = useMemo(() => [...turns].reverse().find((turn) => turn.answer)?.answer, [turns]);
+
+  async function ask(message: string) {
+    const clean = message.trim();
+    if (!clean || busy) return;
+    setText("");
+    setTurns((current) => [...current, { role: "user", text: clean }]);
+    setBusy(true);
+    try {
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: clean, profile }),
+      });
+      const answer = (await response.json()) as Answer;
+      setProfile(answer.profile);
+      if (answer.schemes[0]) setDraftScheme(answer.schemes[0].schemeId);
+      setMode(answer.mode);
+      setTurns((current) => [
+        ...current,
+        { role: "bot", text: english ? answer.answerEn : answer.answerHi, answer },
+      ]);
+    } catch {
+      setTurns((current) => [
+        ...current,
+        {
+          role: "bot",
+          text: "अभी जवाब नहीं बन पाया। फिर कोशिश करें। यह जवाब पक्का नहीं है। कृपया आधिकारिक हेल्पलाइन या नज़दीकी सरकारी कार्यालय पर जाँच करें।",
+        },
+      ]);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function speak(line: string) {
+    if (!window.speechSynthesis) return;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(line);
+    utterance.lang = "hi-IN";
+    window.speechSynthesis.speak(utterance);
+  }
+
+  function listen() {
+    const Ctor = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!Ctor) {
+      setTurns((current) => [
+        ...current,
+        { role: "bot", text: "इस ब्राउज़र में हिन्दी आवाज़ पहचान नहीं है। Chrome में खोलें, या टाइप करें।" },
+      ]);
+      return;
+    }
+    const recognition = new Ctor();
+    recognition.lang = "hi-IN";
+    recognition.interimResults = false;
+    recognition.continuous = false;
+    setListening(true);
+    recognition.onresult = (event) => {
+      const said = event.results[0]?.[0]?.transcript ?? "";
+      setListening(false);
+      if (said) void ask(said);
+    };
+    recognition.onerror = () => setListening(false);
+    recognition.onend = () => setListening(false);
+    recognition.start();
+  }
+
+  return (
+    <div className="app">
+      <header className="top">
+        <div className="brand">
+          <h1>सरकारी साथी</h1>
+          <p>योजनाएँ, आसान हिन्दी में। आवाज़ या लिखकर पूछें।</p>
+        </div>
+        <div className="badge">{mode === "local" ? "बिना कुंजी · स्थानीय" : mode}</div>
+      </header>
+      <div className="banner">
+        अंतिम पात्रता सरकारी रिकॉर्ड से तय होती है। कम भरोसे के जवाब पर कार्यालय या हेल्पलाइन से जाँच करें। फ़ॉर्म ड्राफ्ट आपकी पुष्टि के बाद ही डाउनलोड होता है।
+      </div>
+      <div className="row" style={{ marginBottom: 12 }}>
+        <button className="chip" onClick={() => setEnglish((value) => !value)}>
+          {english ? "हिन्दी में पढ़ें" : "English में पढ़ें"}
+        </button>
+      </div>
+      <nav className="nav">
+        {([
+          ["chat", "बात"],
+          ["form", "पात्रता"],
+          ["schemes", "योजना"],
+          ["draft", "ड्राफ्ट"],
+        ] as [Tab, string][]).map(([id, label]) => (
+          <button key={id} className={tab === id ? "active" : ""} onClick={() => setTab(id)}>
+            {label}
+          </button>
+        ))}
+      </nav>
+      <div className="layout">
+        <section className={`panel chat ${tab === "chat" ? "" : "hide-on-mobile"}`}>
+          <div className="thread">
+            {turns.map((turn, index) => (
+              <article key={index} className={`bubble ${turn.role} ${turn.answer?.lowConfidence ? "low" : ""}`}>
+                {turn.text}
+                {turn.role === "bot" && (
+                  <div>
+                    <button className="speak" onClick={() => speak(turn.text)}>
+                      ज़ोर से सुनें
+                    </button>
+                  </div>
+                )}
+                {turn.answer && <SchemeCards answer={turn.answer} english={english} onDraft={(id) => { setDraftScheme(id); setTab("draft"); }} />}
+              </article>
+            ))}
+          </div>
+          <div className="chips">
+            {SUGGESTIONS.map((suggestion) => (
+              <button key={suggestion} className="chip" onClick={() => void ask(suggestion)}>
+                {suggestion}
+              </button>
+            ))}
+          </div>
+          <div className="composer">
+            <button className={`icon-btn ${listening ? "live" : ""}`} onClick={listen} aria-label="माइक">
+              {listening ? "…" : "🎤"}
+            </button>
+            <textarea
+              value={text}
+              placeholder="हिन्दी या हिंग्लिश में पूछें"
+              onChange={(event) => setText(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  void ask(text);
+                }
+              }}
+            />
+            <button className="send" disabled={busy || !text.trim()} onClick={() => void ask(text)}>
+              भेजें
+            </button>
+          </div>
+        </section>
+        <div className={`stack ${tab === "chat" ? "desktop-only" : ""}`}>
+          {(tab === "chat" || tab === "form") && (
+            <EligibilityForm
+              profile={profile}
+              onChange={setProfile}
+              onSubmit={() => {
+                setTab("chat");
+                void ask("मुझे कौन सी योजना मिल सकती है?");
+              }}
+            />
+          )}
+          {tab === "schemes" && (
+            <Browse english={english} onPick={(id) => { setDraftScheme(id); setTab("draft"); }} />
+          )}
+          {tab === "draft" && (
+            <FormDraft profile={profile} schemeId={draftScheme} onSchemeId={setDraftScheme} />
+          )}
+          {latest && tab !== "draft" && tab !== "schemes" && <Checklist answer={latest} english={english} />}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SchemeCards({
+  answer,
+  english,
+  onDraft,
+}: {
+  answer: Answer;
+  english: boolean;
+  onDraft: (id: string) => void;
+}) {
+  if (!answer.schemes.length) return null;
+  return (
+    <div className="cards">
+      {answer.schemes.map((match) => {
+        const scheme = schemes.find((item) => item.id === match.schemeId);
+        if (!scheme) return null;
+        return (
+          <div className="card" key={match.schemeId}>
+            <span className={`pill ${match.status}`}>{match.status}</span>
+            <h3>{english ? scheme.nameEn : scheme.nameHi}</h3>
+            <p>{english ? scheme.summaryEn : scheme.summaryHi}</p>
+            <p className="meta">
+              स्रोत जाँचा {scheme.sourceCheckedOn}:{" "}
+              <a href={scheme.officialUrl} target="_blank" rel="noreferrer">
+                {scheme.officialUrl}
+              </a>
+            </p>
+            <button className="chip" onClick={() => onDraft(match.schemeId)}>
+              ड्राफ्ट बनाएँ
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function Checklist({ answer, english }: { answer: Answer; english: boolean }) {
+  const rows = answer.schemes.filter((match) => match.status === "eligible" || match.status === "likely");
+  if (!rows.length) return null;
+  return (
+    <section className="panel draft">
+      <h2>दस्तावेज़</h2>
+      {rows.map((match) => {
+        const scheme = schemes.find((item) => item.id === match.schemeId);
+        if (!scheme) return null;
+        const items = english ? scheme.documentsEn : scheme.documentsHi;
+        return (
+          <div key={match.schemeId}>
+            <strong>{english ? scheme.nameEn : scheme.nameHi}</strong>
+            <ul className="docs">
+              {items.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          </div>
+        );
+      })}
+    </section>
+  );
+}
+
+function EligibilityForm({
+  profile,
+  onChange,
+  onSubmit,
+}: {
+  profile: Profile;
+  onChange: (profile: Profile) => void;
+  onSubmit: () => void;
+}) {
+  function set<K extends keyof Profile>(key: K, value: Profile[K]) {
+    onChange({ ...profile, [key]: value });
+  }
+  return (
+    <section className="panel form">
+      <h2>पात्रता फ़ॉर्म</h2>
+      <div className="grid">
+        <label>
+          उम्र
+          <input
+            inputMode="numeric"
+            value={profile.age ?? ""}
+            onChange={(event) => set("age", event.target.value ? Number(event.target.value) : undefined)}
+          />
+        </label>
+        <label>
+          राज्य
+          <select value={profile.state ?? ""} onChange={(event) => set("state", event.target.value || undefined)}>
+            <option value="">चुनें</option>
+            {INDIAN_STATES.map((state) => (
+              <option key={state}>{state}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          काम
+          <select
+            value={profile.occupation ?? ""}
+            onChange={(event) => {
+              const occupation = (event.target.value || undefined) as Profile["occupation"];
+              onChange({
+                ...profile,
+                occupation,
+                isArtisan: occupation === "artisan" ? true : profile.isArtisan,
+                isStreetVendor: occupation === "street_vendor" ? true : profile.isStreetVendor,
+              });
+            }}
+          >
+            <option value="">चुनें</option>
+            <option value="farmer">किसान</option>
+            <option value="daily_wage">मज़दूर</option>
+            <option value="student">छात्र</option>
+            <option value="self_employed">छोटा कारोबार</option>
+            <option value="salaried">नौकरी</option>
+            <option value="homemaker">घर का काम</option>
+            <option value="artisan">कारीगर</option>
+            <option value="street_vendor">रेहड़ी / ठेला</option>
+            <option value="unemployed">अभी काम नहीं</option>
+            <option value="other">अन्य</option>
+          </select>
+        </label>
+        <label>
+          सालाना आय (रुपये)
+          <input
+            inputMode="numeric"
+            value={profile.annualIncome ?? ""}
+            onChange={(event) => set("annualIncome", event.target.value ? Number(event.target.value) : undefined)}
+          />
+        </label>
+        <label>
+          ज़मीन (एकड़)
+          <input
+            inputMode="decimal"
+            value={profile.landAcres ?? ""}
+            onChange={(event) => set("landAcres", event.target.value ? Number(event.target.value) : undefined)}
+          />
+        </label>
+        <label>
+          वर्ग
+          <select value={profile.category ?? ""} onChange={(event) => set("category", (event.target.value || undefined) as Profile["category"])}>
+            <option value="">चुनें</option>
+            <option value="general">सामान्य</option>
+            <option value="obc">ओबीसी</option>
+            <option value="sc">अनुसूचित जाति</option>
+            <option value="st">अनुसूचित जनजाति</option>
+            <option value="ews">ईडब्ल्यूएस</option>
+          </select>
+        </label>
+        <label>
+          लिंग
+          <select value={profile.gender ?? ""} onChange={(event) => set("gender", (event.target.value || undefined) as Profile["gender"])}>
+            <option value="">चुनें</option>
+            <option value="female">महिला</option>
+            <option value="male">पुरुष</option>
+            <option value="other">अन्य</option>
+          </select>
+        </label>
+        <label>
+          गाँव या शहर
+          <select value={profile.area ?? ""} onChange={(event) => set("area", (event.target.value || undefined) as Profile["area"])}>
+            <option value="">चुनें</option>
+            <option value="rural">गाँव</option>
+            <option value="urban">शहर</option>
+          </select>
+        </label>
+      </div>
+      <Bool label="बैंक खाता है" value={profile.hasBankAccount} onChange={(value) => set("hasBankAccount", value)} />
+      <Bool label="बीपीएल परिवार" value={profile.isBpl} onChange={(value) => set("isBpl", value)} />
+      <Bool label="पिछले साल इनकम टैक्स भरा" value={profile.paysIncomeTax} onChange={(value) => set("paysIncomeTax", value)} />
+      <Bool label="पक्का मकान है" value={profile.hasPuccaHouse} onChange={(value) => set("hasPuccaHouse", value)} />
+      <Bool label="10 साल से छोटी बेटी है" value={profile.hasGirlChildUnder10} onChange={(value) => set("hasGirlChildUnder10", value)} />
+      <Bool label="गर्भवती हूँ" value={profile.isPregnant} onChange={(value) => set("isPregnant", value)} />
+      <button className="primary" onClick={onSubmit}>
+        योजनाएँ देखें
+      </button>
+    </section>
+  );
+}
+
+function Bool({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: boolean | undefined;
+  onChange: (value: boolean | undefined) => void;
+}) {
+  return (
+    <label>
+      {label}
+      <select
+        value={value === undefined ? "" : value ? "yes" : "no"}
+        onChange={(event) => onChange(event.target.value === "" ? undefined : event.target.value === "yes")}
+      >
+        <option value="">पता नहीं</option>
+        <option value="yes">हाँ</option>
+        <option value="no">नहीं</option>
+      </select>
+    </label>
+  );
+}
+
+function Browse({ english, onPick }: { english: boolean; onPick: (id: string) => void }) {
+  return (
+    <section className="panel browse">
+      <h2>पंद्रह केन्द्रीय योजनाएँ</h2>
+      <p className="small">सार हमारे शब्दों में हैं। आँकड़े 27 सितम्बर 2026 को लिखे स्रोत से जाँचे गए।</p>
+      {schemes.map((scheme) => (
+        <article className="card" key={scheme.id}>
+          <h3>{english ? scheme.nameEn : scheme.nameHi}</h3>
+          <p>{english ? scheme.summaryEn : scheme.summaryHi}</p>
+          <p className="meta">
+            <a href={scheme.officialUrl} target="_blank" rel="noreferrer">
+              {scheme.officialUrl}
+            </a>
+          </p>
+          <button className="chip" onClick={() => onPick(scheme.id)}>
+            ड्राफ्ट
+          </button>
+        </article>
+      ))}
+    </section>
+  );
+}

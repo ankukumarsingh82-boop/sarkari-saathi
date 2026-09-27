@@ -1,0 +1,14 @@
+{
+  "generatedOn": "2026-09-27",
+  "queries": 58,
+  "hindi": 34,
+  "hinglish": 24,
+  "personas": 6,
+  "eligibilityAccuracy": 1,
+  "citationRate": 1,
+  "lowConfidenceAgreement": 1,
+  "eligibilityPasses": 58,
+  "citationPasses": 53,
+  "citationChecked": 53,
+  "failures": []
+}
