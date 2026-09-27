@@ -20,7 +20,7 @@ export async function maybeRewrite(
   try {
     const text = mode === "gemini" ? await geminiRewrite(answer, message, options?.timeoutMs) : await openai(answer, message, options?.timeoutMs);
     if (!text) return answer;
-    let withLinks = ensureCitations(text, answer);
+    let withLinks = ensureCitations(plainProse(text), answer);
     if (answer.lowConfidence && !withLinks.includes("पक्का नहीं")) {
       withLinks = `${withLinks}\n\n${LOW_LINE_HI}`;
     }
@@ -53,9 +53,11 @@ function contextBlock(answer: Answer, message: string): string {
     "End each Hindi sentence with । and not a Latin full stop.",
     "Use ONLY the records below. Do not invent amounts, ages, or eligibility.",
     "Keep every official URL that belongs to a scheme you name.",
+    "If status is eligible, say the person is पात्र. Use करीब only when status is likely. If status is unknown, ask for the missing facts.",
     "If the records are not enough, say you are not sure and tell the person to verify with the official helpline or office.",
     "Do not say that an application was submitted.",
     "Do not contradict the status field.",
+    "Do not use markdown bold.",
     "Stay under 180 words.",
     "",
     `USER: ${message}`,
@@ -66,7 +68,11 @@ function contextBlock(answer: Answer, message: string): string {
 }
 
 async function geminiRewrite(answer: Answer, message: string, timeoutMs = 12000): Promise<string | null> {
-  return geminiGenerate(contextBlock(answer, message), { timeoutMs, temperature: 0.2, maxOutputTokens: 1024 });
+  return geminiGenerate(contextBlock(answer, message), { timeoutMs, temperature: 0.2, maxOutputTokens: 2048 });
+}
+
+function plainProse(text: string): string {
+  return text.replace(/\*\*([^*]+)\*\*/g, "$1").replace(/__([^_]+)__/g, "$1");
 }
 
 async function openai(answer: Answer, message: string, timeoutMs = 12000): Promise<string | null> {

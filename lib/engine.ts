@@ -10,17 +10,17 @@ const LOW_LINE_EN =
   "This answer is not certain. Please verify it with the official helpline or the nearest government office. Nothing is submitted on your behalf.";
 
 const STATUS_HI: Record<SchemeMatch["status"], string> = {
-  eligible: "अभी दी गई जानकारी से आप इस योजना के करीब हैं",
+  eligible: "अभी दी गई जानकारी से आप इस योजना के पात्र हैं",
   likely: "शर्तें करीब हैं, पर अंतिम नाम सरकारी सूची पर निर्भर है",
-  ineligible: "अभी दी गई जानकारी से यह योजना नहीं बनती",
-  unknown: "पक्का कहने के लिए कुछ बातें और चाहिए",
+  ineligible: "अभी दी गई जानकारी से आप इस योजना के पात्र नहीं हैं",
+  unknown: "पक्का कहने के लिए कुछ और जानकारी चाहिए",
 };
 
 const STATUS_EN: Record<SchemeMatch["status"], string> = {
-  eligible: "On the details given, you are close to this scheme",
+  eligible: "On the details given, you are eligible for this scheme",
   likely: "The conditions are close, but the final name depends on an official list",
-  ineligible: "On the details given, this scheme does not fit",
-  unknown: "A few more facts are needed before this can be decided",
+  ineligible: "On the details given, you are not eligible for this scheme",
+  unknown: "More information is needed before this can be decided",
 };
 
 export function answerQuestion(input: { message: string; profile?: Profile }): Answer {
