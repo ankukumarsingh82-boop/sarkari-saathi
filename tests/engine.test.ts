@@ -100,6 +100,25 @@ test("daughter age is not treated as the applicant age", () => {
   assert.equal(answer.schemes.find((item) => item.schemeId === "ssy")?.status, "eligible");
 });
 
+test("hindi status lines join with a danda", () => {
+  const answer = answerQuestion({
+    message: "मैं उत्तर प्रदेश का किसान हूँ। उम्र 42 साल। 2 एकड़ ज़मीन है। बैंक खाता है।",
+  });
+  assert.match(answer.answerHi, /करीब हैं। आप किसान/);
+  assert.doesNotMatch(answer.answerHi, /[\u0900-\u097F]\./);
+  assert.match(answer.answerEn, /close to this scheme\. You are a farmer/);
+});
+
+test("empty message asks the person to type or speak", () => {
+  const answer = answerQuestion({ message: "   " });
+  assert.equal(answer.needsInfo, true);
+  assert.equal(answer.lowConfidence, false);
+  assert.equal(answer.outOfScope, false);
+  assert.equal(answer.schemes.length, 0);
+  assert.match(answer.answerHi, /टाइप करें या माइक/);
+  assert.doesNotMatch(answer.answerHi, /भरोसेमंद योजना नहीं है/);
+});
+
 test("draft download stays locked until confirmation", () => {
   assert.equal(canDownloadDraft({ confirmed: false, applicantName: "राम", schemeId: "pm-kisan" }), false);
   assert.equal(canDownloadDraft({ confirmed: true, applicantName: "र", schemeId: "pm-kisan" }), false);

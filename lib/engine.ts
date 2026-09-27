@@ -4,7 +4,7 @@ import { getScheme, pmayAssistanceText, schemes } from "./schemes";
 import { bestScore, isGeneralAsk, isGreeting, isOutOfScope, retrievalScores } from "./retrieve";
 import type { Answer, Profile, SchemeMatch } from "./types";
 
-const LOW_LINE_HI =
+export const LOW_LINE_HI =
   "यह जवाब पक्का नहीं है। कृपया आधिकारिक हेल्पलाइन या नज़दीकी सरकारी कार्यालय पर जाँच करें। हम आपकी तरफ़ से कोई आवेदन जमा नहीं करते।";
 const LOW_LINE_EN =
   "This answer is not certain. Please verify it with the official helpline or the nearest government office. Nothing is submitted on your behalf.";
@@ -40,7 +40,10 @@ export function answerQuestion(input: { message: string; profile?: Profile }): A
   let selected: SchemeMatch[] = [];
   let needsInfo = false;
 
-  if (outOfScope || message.length === 0) {
+  if (message.length === 0) {
+    selected = [];
+    needsInfo = true;
+  } else if (outOfScope) {
     selected = [];
   } else if (top > 0) {
     selected = evaluated
@@ -67,7 +70,7 @@ export function answerQuestion(input: { message: string; profile?: Profile }): A
   ]).slice(0, 3);
   const followUpsEn = followUpsHi.map(toEnglishPrompt);
 
-  const answerHi = compose("hi", { message, selected, outOfScope, needsInfo, greeting, lowConfidence, followUpsHi, profile });
+  const answerHi = hindiStops(compose("hi", { message, selected, outOfScope, needsInfo, greeting, lowConfidence, followUpsHi, profile }));
   const answerEn = compose("en", { message, selected, outOfScope, needsInfo, greeting, lowConfidence, followUpsHi: followUpsEn, profile });
 
   return {
@@ -124,6 +127,11 @@ function compose(
   },
 ): string {
   const hi = lang === "hi";
+  if (!ctx.message) {
+    return hi
+      ? "कृपया अपना सवाल टाइप करें या माइक दबाकर बोलें। उम्र, राज्य और काम बताने से योजना ज़्यादा सही निकलती है।"
+      : "Please type a question, or press the mic and speak. Age, state, and work make the scheme match more accurate.";
+  }
   if (ctx.outOfScope) {
     return hi
       ? `यह सरकारी योजनाओं का सहायक है। ${LOW_LINE_HI}`
@@ -150,6 +158,18 @@ function compose(
   return `${lead}\n\n${blocks.join("\n\n")}${extra}${asks}`;
 }
 
+function hindiStops(text: string): string {
+  return text.replace(/([\u0900-\u097F])\.(?=\s|$)/g, "$1।");
+}
+
+function sentenceJoin(left: string, right: string, hi: boolean): string {
+  const stop = hi ? "।" : ".";
+  const head = left.trim().replace(/[।.]+$/u, "");
+  const tail = right.trim();
+  if (!tail) return `${head}${stop}`;
+  return `${head}${stop} ${tail}`;
+}
+
 function blockFor(match: SchemeMatch, hi: boolean, profile: Profile): string {
   const scheme = getScheme(match.schemeId);
   if (!scheme) return match.schemeId;
@@ -162,7 +182,7 @@ function blockFor(match: SchemeMatch, hi: boolean, profile: Profile): string {
   return [
     name,
     summary,
-    `${hi ? "स्थिति" : "Status"}: ${status}. ${reason}`,
+    sentenceJoin(`${hi ? "स्थिति" : "Status"}: ${status}`, reason ?? "", hi),
     pmay,
     `${hi ? "स्रोत" : "Source"}: ${scheme.officialUrl}`,
     helpline,
