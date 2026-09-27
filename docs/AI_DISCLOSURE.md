@@ -30,13 +30,14 @@ There is no vector database and no embedding API. Retrieval is a weighted keywor
 ## Libraries and runtime tools
 
 - Next.js 15, React 19, TypeScript
-- `pdf-lib` to wrap a browser-canvas rendering of the draft (so Devanagari shaping is done by the browser, not guessed)
+- `pdf-lib` and `@pdf-lib/fontkit` embed Noto Sans Devanagari so the draft PDF is one page of selectable text. If that font path fails in the browser, the page falls back to a single canvas image.
 - Noto Sans Devanagari, SIL Open Font License, file `public/fonts/NotoSansDevanagari-Regular.ttf`
-- Hosting target: Vercel. Set `GEMINI_API_KEY`, `SARVAM_API_KEY`, and `FIRECRAWL_API_KEY` in the project environment when those integrations should run. The app still builds and answers with none of them set.
+- Hosting target: Vercel, production branch `main`, public app [https://sarkari-saathi-app.vercel.app](https://sarkari-saathi-app.vercel.app). Set `GEMINI_API_KEY`, `SARVAM_API_KEY`, and `FIRECRAWL_API_KEY` in the project environment when those integrations should run. The app still builds and answers with none of them set.
 
 ## Tools used to produce the repository
 
 - Cursor cloud agent, model Grok, wrote and edited this repository on 27 September 2026.
+- The demo video and project deck were produced with help from a Grok agent using Playwright screen recording and Microsoft Edge neural TTS voiceover.
 - Public web pages of the ministries and PIB, fetched to check eligibility and amounts before they were written into `lib/schemes.ts`.
 - No paid dataset, no fine-tune, and no agent framework that submits forms.
 

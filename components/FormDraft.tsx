@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { PDFDocument } from "pdf-lib";
 import { canDownloadDraft, draftLines } from "@/lib/draft";
+import { buildDraftPdf } from "@/lib/draft-pdf";
 import { schemes } from "@/lib/schemes";
 import type { Profile } from "@/lib/types";
 
@@ -31,7 +32,7 @@ export function FormDraft({
       profile: { ...profile, name },
       aadhaarLast4: aadhaar,
     });
-    const blob = await linesToPdf(lines);
+    const blob = await draftPdf(lines);
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
@@ -85,56 +86,62 @@ export function FormDraft({
   );
 }
 
+async function draftPdf(lines: string[]): Promise<Blob> {
+  try {
+    const fontResponse = await fetch("/fonts/NotoSansDevanagari-Regular.ttf");
+    if (!fontResponse.ok) throw new Error("font");
+    const bytes = await buildDraftPdf(new Uint8Array(await fontResponse.arrayBuffer()), lines);
+    return new Blob([Uint8Array.from(bytes)], { type: "application/pdf" });
+  } catch {
+    return linesToPdf(lines);
+  }
+}
+
 async function linesToPdf(lines: string[]): Promise<Blob> {
   const width = 794;
   const height = 1123;
-  const pages = paginate(lines, width, height);
+  const canvas = renderOnePage(lines, width, height);
   const pdf = await PDFDocument.create();
-  for (const canvas of pages) {
-    const png = canvas.toDataURL("image/png");
-    const bytes = dataUrlToBytes(png);
-    const image = await pdf.embedPng(bytes);
-    const page = pdf.addPage([595.28, 841.89]);
-    page.drawImage(image, { x: 0, y: 0, width: 595.28, height: 841.89 });
-  }
+  const png = canvas.toDataURL("image/png");
+  const image = await pdf.embedPng(dataUrlToBytes(png));
+  const page = pdf.addPage([595.28, 841.89]);
+  page.drawImage(image, { x: 0, y: 0, width: 595.28, height: 841.89 });
   const saved = await pdf.save();
   return new Blob([Uint8Array.from(saved)], { type: "application/pdf" });
 }
 
-function paginate(lines: string[], width: number, height: number): HTMLCanvasElement[] {
+function renderOnePage(lines: string[], width: number, height: number): HTMLCanvasElement {
   const probe = document.createElement("canvas").getContext("2d");
-  if (!probe) return [];
-  probe.font = "22px 'Noto Sans Devanagari', sans-serif";
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!probe || !ctx) return canvas;
   const margin = 48;
   const maxWidth = width - margin * 2;
-  const wrapped: string[] = [];
-  for (const line of lines) {
-    if (!line) {
-      wrapped.push("");
-      continue;
+  let fontSize = 18;
+  let wrapped: string[] = [];
+  let lineHeight = 26;
+  while (fontSize >= 11) {
+    probe.font = `${fontSize}px 'Noto Sans Devanagari', sans-serif`;
+    lineHeight = Math.round(fontSize * 1.35);
+    wrapped = [];
+    for (const line of lines) {
+      if (!line) wrapped.push("");
+      else wrapped.push(...wrap(probe, line, maxWidth));
     }
-    wrapped.push(...wrap(probe, line, maxWidth));
+    if (wrapped.length * lineHeight <= height - margin * 2) break;
+    fontSize -= 1;
   }
-  const lineHeight = 32;
-  const perPage = Math.floor((height - margin * 2) / lineHeight);
-  const canvases: HTMLCanvasElement[] = [];
-  for (let index = 0; index < wrapped.length; index += perPage) {
-    const slice = wrapped.slice(index, index + perPage);
-    const canvas = document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) continue;
-    ctx.fillStyle = "#fffdf8";
-    ctx.fillRect(0, 0, width, height);
-    ctx.fillStyle = "#1d1a16";
-    ctx.font = "22px 'Noto Sans Devanagari', sans-serif";
-    slice.forEach((line, row) => {
-      ctx.fillText(line, margin, margin + (row + 1) * lineHeight);
-    });
-    canvases.push(canvas);
-  }
-  return canvases.length ? canvases : [blank(width, height)];
+  ctx.fillStyle = "#fffdf8";
+  ctx.fillRect(0, 0, width, height);
+  ctx.fillStyle = "#1d1a16";
+  ctx.font = `${fontSize}px 'Noto Sans Devanagari', sans-serif`;
+  wrapped.forEach((line, row) => {
+    const y = margin + (row + 1) * lineHeight;
+    if (y < height - margin / 2) ctx.fillText(line, margin, y);
+  });
+  return canvas;
 }
 
 function wrap(ctx: CanvasRenderingContext2D, line: string, maxWidth: number): string[] {
@@ -152,18 +159,6 @@ function wrap(ctx: CanvasRenderingContext2D, line: string, maxWidth: number): st
   }
   if (current) rows.push(current);
   return rows.length ? rows : [""];
-}
-
-function blank(width: number, height: number): HTMLCanvasElement {
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext("2d");
-  if (ctx) {
-    ctx.fillStyle = "#fff";
-    ctx.fillRect(0, 0, width, height);
-  }
-  return canvas;
 }
 
 function dataUrlToBytes(dataUrl: string): Uint8Array {

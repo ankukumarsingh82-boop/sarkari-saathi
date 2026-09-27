@@ -4,9 +4,10 @@ import dynamic from "next/dynamic";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 const FormDraft = dynamic(() => import("@/components/FormDraft").then((mod) => mod.FormDraft), { ssr: false });
-import { INDIAN_STATES } from "@/lib/extract";
+import { profileForTurn, sessionAfterAnswer } from "@/lib/context";
+import { INDIAN_STATES, mergeProfiles } from "@/lib/extract";
 import { schemes } from "@/lib/schemes";
-import type { Answer, Profile } from "@/lib/types";
+import type { Answer, Profile, SchemeMatch } from "@/lib/types";
 
 type Tab = "chat" | "form" | "schemes" | "draft";
 
@@ -24,6 +25,16 @@ interface Turn {
 }
 
 const EMPTY: Profile = {};
+const FORM_KEY = "saathi-form";
+const GREETING =
+  "नमस्ते। मैं सरकारी साथी हूँ। हिन्दी या हिंग्लिश में योजना पूछें, या माइक दबाएँ। मैं स्रोत के साथ जवाब दूँगा। आवेदन मैं जमा नहीं करता।";
+
+const PILL_LABEL: Record<SchemeMatch["status"], string> = {
+  eligible: "eligible",
+  likely: "likely",
+  ineligible: "ineligible",
+  unknown: "needs-info",
+};
 
 const SUGGESTIONS = [
   "मुझे किसान के लिए कौन सी योजना मिलेगी?",
@@ -34,7 +45,9 @@ const SUGGESTIONS = [
 
 export function SaathiApp() {
   const [tab, setTab] = useState<Tab>("chat");
-  const [profile, setProfile] = useState<Profile>(EMPTY);
+  const [formProfile, setFormProfile] = useState<Profile>(EMPTY);
+  const [sessionProfile, setSessionProfile] = useState<Profile>(EMPTY);
+  const [profileReady, setProfileReady] = useState(false);
   const [draftScheme, setDraftScheme] = useState("pm-kisan");
   const [text, setText] = useState("");
   const [listening, setListening] = useState(false);
@@ -47,22 +60,23 @@ export function SaathiApp() {
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const recordTimer = useRef<number | null>(null);
   const playback = useRef(0);
-  const [turns, setTurns] = useState<Turn[]>([
-    {
-      role: "bot",
-      text: "नमस्ते। मैं सरकारी साथी हूँ। हिन्दी या हिंग्लिश में योजना पूछें, या माइक दबाएँ। मैं स्रोत के साथ जवाब दूँगा। आवेदन मैं जमा नहीं करता।",
-    },
-  ]);
+  const formRef = useRef(formProfile);
+  const sessionRef = useRef(sessionProfile);
+  formRef.current = formProfile;
+  sessionRef.current = sessionProfile;
+  const [turns, setTurns] = useState<Turn[]>([{ role: "bot", text: GREETING }]);
 
   useEffect(() => {
-    const saved = window.localStorage.getItem("saathi-profile");
+    window.localStorage.removeItem("saathi-profile");
+    const saved = window.localStorage.getItem(FORM_KEY);
     if (saved) {
       try {
-        setProfile(JSON.parse(saved) as Profile);
+        setFormProfile(JSON.parse(saved) as Profile);
       } catch {
         /* keep empty */
       }
     }
+    setProfileReady(true);
     fetch("/api/health")
       .then((response) => response.json())
       .then((data: { mode?: string; sarvam?: boolean; search?: boolean }) => {
@@ -74,14 +88,43 @@ export function SaathiApp() {
   }, []);
 
   useEffect(() => {
-    window.localStorage.setItem("saathi-profile", JSON.stringify(profile));
-  }, [profile]);
+    if (!profileReady) return;
+    window.localStorage.setItem(FORM_KEY, JSON.stringify(formProfile));
+  }, [formProfile, profileReady]);
 
   const latest = useMemo(() => [...turns].reverse().find((turn) => turn.answer)?.answer, [turns]);
 
-  async function ask(message: string) {
+  function setField<K extends keyof Profile>(key: K, value: Profile[K]) {
+    setFormProfile((current) => {
+      const next = { ...current, [key]: value };
+      if (value === undefined) delete next[key];
+      return next;
+    });
+    setSessionProfile((current) => {
+      if (current[key] === undefined) return current;
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+  }
+
+  function reset() {
+    if (recorderRef.current?.state === "recording") recorderRef.current.stop();
+    recognitionRef.current?.stop();
+    setListening(false);
+    setFormProfile(EMPTY);
+    setSessionProfile(EMPTY);
+    setText("");
+    setDraftScheme("pm-kisan");
+    setTurns([{ role: "bot", text: GREETING }]);
+    window.localStorage.removeItem(FORM_KEY);
+    window.localStorage.removeItem("saathi-profile");
+  }
+
+  async function ask(message: string, profileOverride?: Profile) {
     const clean = message.trim();
     if (!clean || busy) return;
+    const profile = profileOverride ?? profileForTurn(clean, formRef.current, sessionRef.current);
     setText("");
     setTurns((current) => [...current, { role: "user", text: clean }]);
     setBusy(true);
@@ -92,7 +135,7 @@ export function SaathiApp() {
         body: JSON.stringify({ message: clean, profile }),
       });
       const answer = (await response.json()) as Answer;
-      setProfile(answer.profile);
+      setSessionProfile(sessionAfterAnswer(formRef.current, answer.profile));
       if (answer.schemes[0]) setDraftScheme(answer.schemes[0].schemeId);
       setMode(answer.mode);
       const id = crypto.randomUUID();
@@ -302,6 +345,9 @@ export function SaathiApp() {
         <button className="chip" onClick={() => setEnglish((value) => !value)}>
           {english ? "हिन्दी में पढ़ें" : "English में पढ़ें"}
         </button>
+        <button className="chip" type="button" onClick={reset}>
+          नया सवाल / reset
+        </button>
       </div>
       <nav className="nav">
         {([
@@ -381,11 +427,11 @@ export function SaathiApp() {
         <div className={`stack ${tab === "chat" ? "desktop-only" : ""}`}>
           {(tab === "chat" || tab === "form") && (
             <EligibilityForm
-              profile={profile}
-              onChange={setProfile}
+              profile={mergeProfiles(formProfile, sessionProfile)}
+              onField={setField}
               onSubmit={() => {
                 setTab("chat");
-                void ask("मुझे कौन सी योजना मिल सकती है?");
+                void ask("मुझे कौन सी योजना मिल सकती है?", mergeProfiles(formProfile, sessionProfile));
               }}
             />
           )}
@@ -393,7 +439,7 @@ export function SaathiApp() {
             <Browse english={english} onPick={(id) => { setDraftScheme(id); setTab("draft"); }} />
           )}
           {tab === "draft" && (
-            <FormDraft profile={profile} schemeId={draftScheme} onSchemeId={setDraftScheme} />
+            <FormDraft profile={mergeProfiles(formProfile, sessionProfile)} schemeId={draftScheme} onSchemeId={setDraftScheme} />
           )}
           {latest && tab !== "draft" && tab !== "schemes" && <Checklist answer={latest} english={english} />}
         </div>
@@ -419,7 +465,7 @@ function SchemeCards({
         if (!scheme) return null;
         return (
           <div className="card" key={match.schemeId}>
-            <span className={`pill ${match.status}`}>{match.status}</span>
+            <span className={`pill ${match.status}`}>{PILL_LABEL[match.status]}</span>
             <h3>{english ? scheme.nameEn : scheme.nameHi}</h3>
             <p>{english ? scheme.summaryEn : scheme.summaryHi}</p>
             <p className="meta">
@@ -465,15 +511,15 @@ function Checklist({ answer, english }: { answer: Answer; english: boolean }) {
 
 function EligibilityForm({
   profile,
-  onChange,
+  onField,
   onSubmit,
 }: {
   profile: Profile;
-  onChange: (profile: Profile) => void;
+  onField: <K extends keyof Profile>(key: K, value: Profile[K]) => void;
   onSubmit: () => void;
 }) {
   function set<K extends keyof Profile>(key: K, value: Profile[K]) {
-    onChange({ ...profile, [key]: value });
+    onField(key, value);
   }
   return (
     <section className="panel form">
@@ -502,12 +548,9 @@ function EligibilityForm({
             value={profile.occupation ?? ""}
             onChange={(event) => {
               const occupation = (event.target.value || undefined) as Profile["occupation"];
-              onChange({
-                ...profile,
-                occupation,
-                isArtisan: occupation === "artisan" ? true : profile.isArtisan,
-                isStreetVendor: occupation === "street_vendor" ? true : profile.isStreetVendor,
-              });
+              set("occupation", occupation);
+              set("isArtisan", occupation === "artisan" ? true : undefined);
+              set("isStreetVendor", occupation === "street_vendor" ? true : undefined);
             }}
           >
             <option value="">चुनें</option>

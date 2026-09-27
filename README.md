@@ -10,7 +10,8 @@ A small farmer, a daily-wage worker, or an older person who is comfortable in Hi
 2. **Scheme finder.** Age, state, occupation, income, land, category, and gender, plus a few yes/no facts, go through a rules engine.
 3. **Cited answers.** Every scheme card and every scheme named in the answer carries the official URL and the date that page was checked (27 September 2026).
 4. **Document checklist.** Papers for each matched scheme, from the same record as the answer.
-5. **Guided form draft.** A PDF is built in the browser. The download stays off until the person confirms they have reviewed it. The file says it is a draft and that it was not submitted.
+5. **Guided form draft.** A one-page PDF is built in the browser, with selectable Devanagari text. The download stays off until the person confirms they have reviewed it. The file says it is a draft and that it was not submitted.
+6. **नया सवाल / reset.** Facts typed in the पात्रता form stay for the next question. Facts that only came from an earlier chat are dropped when the next message is a different scheme question, so an old answer is not scored again. The reset control clears both.
 
 Fifteen central schemes are in the knowledge base: PM-KISAN, Ayushman Bharat PM-JAY, PMAY-G, PM Ujjwala, Sukanya Samriddhi, Atal Pension Yojana, PMJJBY, PMSBY, PM Mudra, PM Vishwakarma, National Scholarship Portal, e-Shram, PM SVANidhi, Janani Suraksha Yojana, and the NSAP old-age pension (IGNOAPS).
 
@@ -66,10 +67,10 @@ cp .env.example .env.local   # leave the keys empty
 npm run dev
 ```
 
-Open http://localhost:3000.
+The public app is [https://sarkari-saathi-app.vercel.app](https://sarkari-saathi-app.vercel.app). Locally, open http://localhost:3000.
 
 ```bash
-npm test          # unit tests, including mocked Gemini, Sarvam, and Firecrawl
+npm test          # unit tests on Node 20 and 22; the runner lists tests/*.test.ts itself
 npm run eval      # 58 Hindi and Hinglish queries, keyless
 npm run eval -- --llm   # same metrics through the rewrite path; needs a key
 npm run build && npm start
@@ -106,13 +107,13 @@ Latest keyless run (`npm run eval`, 27 September 2026), also stored in `eval/res
 | Eligibility accuracy | **100%** (58/58) |
 | Citation presence | **100%** (53/53 cases that require a source) |
 | Low-confidence agreement | **100%** (58/58) |
-| Unit tests | 30 passing |
+| Unit tests | 37 passing |
 
 This is a deterministic check against labels written from the same official rules as the engine, including negatives (income-tax payer, wrong age, man asking for Ujjwala, pucca house, out-of-scope cricket and weather). It is not a blind field study. Hindi fluency still needs a human rating of 1–5 before submission. The deck's target was at least 90% eligibility accuracy and a cited answer.
 
 ## Demo script (about 3 minutes)
 
-1. **0:00** Open the deployed link on a phone. Point at the banner: nothing is submitted, and a weak answer says to check the office.
+1. **0:00** Open [https://sarkari-saathi-app.vercel.app](https://sarkari-saathi-app.vercel.app) on a phone. Point at the banner: nothing is submitted, and a weak answer says to check the office.
 2. **0:20** Tap the mic, or type: `mujhe kisaan ke liye kaunsi yojana milegi? main UP ka kisaan hoon, umar 42, 2 acre, bank account hai`. Show PM-KISAN in Hindi, ₹6,000, and the pmkisan.gov.in link. Tap “ज़ोर से सुनें”. With `SARVAM_API_KEY`, the mic records and Sarvam speaks the answer; without it, the browser `hi-IN` voices do both.
 3. **1:05** Open पात्रता. Fill a 68-year-old BPL person in Bihar and press योजनाएँ देखें. Show the old-age pension and the note that the state adds its own top-up.
 4. **1:40** Ask `aaj cricket ka score kya hai`. Show the low-confidence line and that no scheme is recommended.

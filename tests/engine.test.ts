@@ -104,9 +104,25 @@ test("hindi status lines join with a danda", () => {
   const answer = answerQuestion({
     message: "मैं उत्तर प्रदेश का किसान हूँ। उम्र 42 साल। 2 एकड़ ज़मीन है। बैंक खाता है।",
   });
-  assert.match(answer.answerHi, /करीब हैं। आप किसान/);
+  assert.match(answer.answerHi, /पात्र हैं। आप किसान/);
+  assert.doesNotMatch(answer.answerHi, /करीब हैं/);
   assert.doesNotMatch(answer.answerHi, /[\u0900-\u097F]\./);
-  assert.match(answer.answerEn, /close to this scheme\. You are a farmer/);
+  assert.match(answer.answerEn, /eligible for this scheme\. You are a farmer/);
+});
+
+test("likely and needs-info status lines match the pill", () => {
+  const likely = answerQuestion({ message: "गाँव में कच्चा मकान है, आवास योजना" });
+  assert.equal(likely.schemes[0]?.status, "likely");
+  assert.match(likely.answerHi, /करीब हैं/);
+  assert.doesNotMatch(likely.answerHi, /पात्र हैं/);
+  assert.doesNotMatch(likely.answerHi, /[\u0900-\u097F]\./);
+  assert.match(likely.answerEn, /conditions are close/);
+
+  const needsInfo = answerQuestion({ message: "आयुष्मान कार्ड कैसे बनता है" });
+  assert.equal(needsInfo.schemes[0]?.status, "unknown");
+  assert.match(needsInfo.answerHi, /जानकारी चाहिए।/);
+  assert.match(needsInfo.answerEn, /More information is needed/);
+  assert.doesNotMatch(needsInfo.answerHi, /[\u0900-\u097F]\./);
 });
 
 test("empty message asks the person to type or speak", () => {
