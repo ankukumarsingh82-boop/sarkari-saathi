@@ -6,13 +6,16 @@ AI Build Challenge 2026, project round. This file lists what actually runs in Sa
 
 | Piece | When it runs | What it does |
 | --- | --- | --- |
-| None | Default, including the public demo | No model is called. Answers are Hindi templates over retrieved scheme text. |
-| Gemini, default model `gemini-2.0-flash` | Only if `GEMINI_API_KEY` is set on the server | Rewrites the Hindi prose. The prompt contains only the retrieved scheme records, the rules-engine status, and the user's question. |
-| OpenAI, default model `gpt-4o-mini` | Only if Gemini is unset and `OPENAI_API_KEY` is set | Same grounded rewrite. |
+| None | Default, whenever the matching key is unset or the call fails | Answers are Hindi templates over retrieved scheme text. Speech uses the browser. |
+| Gemini, default model `gemini-2.5-flash` | Only if `GEMINI_API_KEY` is set on the server | Rewrites the Hindi prose. The prompt contains only the retrieved scheme records, the rules-engine status, and the user's question. On a few messy Hinglish cues the local extractor misses (spoken ages, "lady", "ITR", "jhuggi", number-words for land), a second short call may fill blank profile fields. A field is kept only when the model quotes a substring of the message that supports it. The rules engine still decides eligibility. |
+| OpenAI, default model `gpt-4o-mini` | Only if Gemini is unset and `OPENAI_API_KEY` is set | Same grounded rewrite. It does not fill profile fields. |
+| Sarvam speech-to-text, default `saaras:v3` | Only if `SARVAM_API_KEY` is set | `POST https://api.sarvam.ai/speech-to-text` with `language_code=hi-IN`. The browser records a short clip and this server route transcribes it. `saarika:v2.5` remains available via `SARVAM_STT_MODEL` but is the legacy model. |
+| Sarvam text-to-speech, default `bulbul:v3` speaker `shubh` | Only if `SARVAM_API_KEY` is set | `POST https://api.sarvam.ai/text-to-speech` in `hi-IN`. Text longer than the model limit (2,500 characters on bulbul v3) is split on sentence boundaries. |
+| Firecrawl search | Only if `FIRECRAWL_API_KEY` is set | `POST https://api.firecrawl.dev/v1/search`. After the answer is on screen, up to three result links whose hosts are `*.gov.in` or `*.nic.in` are shown as हाल की आधिकारिक जानकारी. The curated record stays the primary source. |
 
-Eligibility, citations, and the low-confidence flag are computed before any model call. If the model omits an official URL, the server appends it. If the call fails or times out (12 seconds), the template answer is returned unchanged.
+Eligibility, citations, and the low-confidence flag are computed by the rules engine. If the rewrite omits an official URL, the server appends it. If a low-confidence warning is dropped, the server appends it again. If a call fails or times out (12 seconds for a rewrite, 4 seconds for slot filling and for search), the template answer is what the person sees. Search never blocks that answer.
 
-The idea deck mentioned Sarvam AI, Bhashini, and Whisper. This build does not call them. Speech in and speech out use the browser Web Speech API (`hi-IN` recognition and `speechSynthesis`). That keeps the deployed link usable with no key.
+The key stays on the server (`x-goog-api-key` for Gemini, `api-subscription-key` for Sarvam, `Authorization: Bearer` for Firecrawl). `/api/health` reports only booleans. With no key, speech in and speech out use the browser Web Speech API (`hi-IN` recognition and `speechSynthesis`). Bhashini and Whisper are not called.
 
 ## Retrieval
 
@@ -29,7 +32,7 @@ There is no vector database and no embedding API. Retrieval is a weighted keywor
 - Next.js 15, React 19, TypeScript
 - `pdf-lib` to wrap a browser-canvas rendering of the draft (so Devanagari shaping is done by the browser, not guessed)
 - Noto Sans Devanagari, SIL Open Font License, file `public/fonts/NotoSansDevanagari-Regular.ttf`
-- Hosting target: Vercel, zero-config import of this Next.js app
+- Hosting target: Vercel. Set `GEMINI_API_KEY`, `SARVAM_API_KEY`, and `FIRECRAWL_API_KEY` in the project environment when those integrations should run. The app still builds and answers with none of them set.
 
 ## Tools used to produce the repository
 

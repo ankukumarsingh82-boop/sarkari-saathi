@@ -10,10 +10,13 @@ The public link has to work with no API key. The core is therefore deterministic
 
 ```text
 Hindi or Hinglish text
-  (typed, or Web Speech hi-IN)
+  (typed, Sarvam STT when SARVAM_API_KEY is set, otherwise Web Speech hi-IN)
         |
         v
-slot extractor  --->  profile (age, state, work, income, land, category, gender, plus a few yes/no facts)
+slot extractor  --->  profile
+        |
+        +--> if GEMINI_API_KEY and the text has a cue the extractor missed:
+               fill only the blank fields, and only when the quote is in the message
         |
         v
 keyword retrieval over 15 scheme records
@@ -27,8 +30,12 @@ rules engine (eligible / likely / ineligible / unknown)
                rewrite the prose only, grounded in the same records
                eligibility status is not taken from the model
         |
+        +--> after the answer renders, if FIRECRAWL_API_KEY:
+               up to 3 official *.gov.in / *.nic.in links, cached briefly
+        |
         v
 scheme cards, document checklist, confirmed PDF draft
+readout: Sarvam TTS when configured, otherwise browser speechSynthesis
 ```
 
 Eligibility never depends on the model. A missing fact stays `unknown` instead of being guessed. `likely` means the official list (SECC, Awaas+, Gram Sabha, deprivation declaration, bank sanction) still has to confirm the name. The screen always says the government record is final. A low-confidence or out-of-scope answer adds an explicit line: verify with the helpline or the nearest office. The PDF is generated in the browser and is not uploaded.
