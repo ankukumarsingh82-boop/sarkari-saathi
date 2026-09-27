@@ -143,14 +143,8 @@ export function extractProfile(message: string): Partial<Profile> {
   const land = readLand(text);
   if (land !== undefined) profile.landAcres = land;
 
-  for (const state of STATES) {
-    if (state.keys.some((key) => text.includes(key))) {
-      profile.state = state.name;
-      break;
-    }
-  }
-  if (hasAny(text, [" u.p ", " u p ", " up "]) && !profile.state) profile.state = "Uttar Pradesh";
-  if (hasAny(text, [" m.p ", " mp "]) && !profile.state) profile.state = "Madhya Pradesh";
+  const state = matchState(text);
+  if (state) profile.state = state;
 
   const occupation = readOccupation(text);
   if (occupation) profile.occupation = occupation;
@@ -222,6 +216,15 @@ function stripUndefined(input: Partial<Profile>): Partial<Profile> {
     if (value !== undefined) (output as Record<string, unknown>)[key] = value;
   }
   return output;
+}
+
+export function matchState(foldedPadded: string): string | undefined {
+  for (const state of STATES) {
+    if (state.keys.some((key) => foldedPadded.includes(key))) return state.name;
+  }
+  if (hasAny(foldedPadded, [" u.p ", " u p ", " up "])) return "Uttar Pradesh";
+  if (hasAny(foldedPadded, [" m.p ", " mp "])) return "Madhya Pradesh";
+  return undefined;
 }
 
 export const INDIAN_STATES = STATES.map((state) => state.name);

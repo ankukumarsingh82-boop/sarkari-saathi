@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 const FormDraft = dynamic(() => import("@/components/FormDraft").then((mod) => mod.FormDraft), { ssr: false });
 import { INDIAN_STATES } from "@/lib/extract";
@@ -10,10 +10,17 @@ import type { Answer, Profile } from "@/lib/types";
 
 type Tab = "chat" | "form" | "schemes" | "draft";
 
+interface UpdateLink {
+  title: string;
+  url: string;
+}
+
 interface Turn {
   role: "user" | "bot";
+  id?: string;
   text: string;
   answer?: Answer;
+  updates?: UpdateLink[];
 }
 
 const EMPTY: Profile = {};
@@ -33,7 +40,13 @@ export function SaathiApp() {
   const [listening, setListening] = useState(false);
   const [busy, setBusy] = useState(false);
   const [mode, setMode] = useState("local");
+  const [sarvam, setSarvam] = useState(false);
+  const [searchOn, setSearchOn] = useState(false);
   const [english, setEnglish] = useState(false);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const recordTimer = useRef<number | null>(null);
+  const playback = useRef(0);
   const [turns, setTurns] = useState<Turn[]>([
     {
       role: "bot",
@@ -52,7 +65,11 @@ export function SaathiApp() {
     }
     fetch("/api/health")
       .then((response) => response.json())
-      .then((data: { mode?: string }) => setMode(data.mode ?? "local"))
+      .then((data: { mode?: string; sarvam?: boolean; search?: boolean }) => {
+        setMode(data.mode ?? "local");
+        setSarvam(Boolean(data.sarvam));
+        setSearchOn(Boolean(data.search));
+      })
       .catch(() => setMode("local"));
   }, []);
 
@@ -78,10 +95,26 @@ export function SaathiApp() {
       setProfile(answer.profile);
       if (answer.schemes[0]) setDraftScheme(answer.schemes[0].schemeId);
       setMode(answer.mode);
+      const id = crypto.randomUUID();
       setTurns((current) => [
         ...current,
-        { role: "bot", text: english ? answer.answerEn : answer.answerHi, answer },
+        { role: "bot", id, text: english ? answer.answerEn : answer.answerHi, answer },
       ]);
+      if (searchOn && answer.schemes.length) {
+        const schemeIds = answer.schemes.slice(0, 3).map((match) => match.schemeId);
+        void fetch("/api/updates", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ schemeIds }),
+        })
+          .then((updateResponse) => (updateResponse.ok ? updateResponse.json() : null))
+          .then((data: { updates?: UpdateLink[] } | null) => {
+            const updates = (data?.updates ?? []).filter((item) => item.url.startsWith("http")).slice(0, 3);
+            if (!updates.length) return;
+            setTurns((current) => current.map((turn) => (turn.id === id ? { ...turn, updates } : turn)));
+          })
+          .catch(() => undefined);
+      }
     } catch {
       setTurns((current) => [
         ...current,
@@ -95,7 +128,7 @@ export function SaathiApp() {
     }
   }
 
-  function speak(line: string) {
+  function speakBrowser(line: string) {
     if (!window.speechSynthesis) return;
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(line);
@@ -103,7 +136,55 @@ export function SaathiApp() {
     window.speechSynthesis.speak(utterance);
   }
 
-  function listen() {
+  function stopPlayback() {
+    playback.current += 1;
+    window.speechSynthesis?.cancel();
+  }
+
+  async function playSequence(audios: string[], token: number) {
+    for (const b64 of audios) {
+      if (token !== playback.current) return;
+      const bytes = Uint8Array.from(atob(b64), (char) => char.charCodeAt(0));
+      const url = URL.createObjectURL(new Blob([bytes], { type: "audio/wav" }));
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const audio = new Audio(url);
+          audio.onended = () => resolve();
+          audio.onerror = () => reject(new Error("audio"));
+          void audio.play().catch(reject);
+        });
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    }
+  }
+
+  async function speak(line: string) {
+    stopPlayback();
+    const token = playback.current;
+    if (sarvam) {
+      try {
+        const response = await fetch("/api/speech/tts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: line.slice(0, 8000) }),
+        });
+        if (response.ok) {
+          const data = (await response.json()) as { audios?: string[] };
+          if (data.audios?.length) {
+            await playSequence(data.audios, token);
+            return;
+          }
+        }
+      } catch {
+        /* browser voice below */
+      }
+    }
+    if (token !== playback.current) return;
+    speakBrowser(line);
+  }
+
+  function listenBrowser() {
     const Ctor = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!Ctor) {
       setTurns((current) => [
@@ -113,6 +194,7 @@ export function SaathiApp() {
       return;
     }
     const recognition = new Ctor();
+    recognitionRef.current = recognition;
     recognition.lang = "hi-IN";
     recognition.interimResults = false;
     recognition.continuous = false;
@@ -125,6 +207,83 @@ export function SaathiApp() {
     recognition.onerror = () => setListening(false);
     recognition.onend = () => setListening(false);
     recognition.start();
+  }
+
+  async function listenSarvam() {
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      listenBrowser();
+      return;
+    }
+    const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find((type) => MediaRecorder.isTypeSupported(type));
+    let recorder: MediaRecorder;
+    try {
+      recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+    } catch {
+      stream.getTracks().forEach((track) => track.stop());
+      listenBrowser();
+      return;
+    }
+    const chunks: Blob[] = [];
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) chunks.push(event.data);
+    };
+    recorder.onstop = () => {
+      stream.getTracks().forEach((track) => track.stop());
+      if (recordTimer.current) window.clearTimeout(recordTimer.current);
+      setListening(false);
+      const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
+      if (blob.size < 800) {
+        setTurns((current) => [
+          ...current,
+          { role: "bot", text: "आवाज़ बहुत छोटी थी। फिर बोलें, या सवाल टाइप करें।" },
+        ]);
+        return;
+      }
+      void sendAudio(blob, recorder.mimeType || "audio/webm");
+    };
+    recorderRef.current = recorder;
+    setListening(true);
+    recorder.start();
+    recordTimer.current = window.setTimeout(() => {
+      if (recorder.state === "recording") recorder.stop();
+    }, 28000);
+  }
+
+  async function sendAudio(blob: Blob, mime: string) {
+    const extension = mime.includes("mp4") ? "m4a" : "webm";
+    const form = new FormData();
+    form.append("file", blob, `speech.${extension}`);
+    try {
+      const response = await fetch("/api/speech/stt", { method: "POST", body: form });
+      const data = (await response.json()) as { transcript?: string | null };
+      if (response.ok && data.transcript) {
+        void ask(data.transcript);
+        return;
+      }
+    } catch {
+      /* message below */
+    }
+    setTurns((current) => [
+      ...current,
+      { role: "bot", text: "आवाज़ समझ नहीं आई। फिर बोलें, या सवाल टाइप करें।" },
+    ]);
+  }
+
+  function listen() {
+    if (listening) {
+      if (recorderRef.current?.state === "recording") recorderRef.current.stop();
+      recognitionRef.current?.stop();
+      setListening(false);
+      return;
+    }
+    if (sarvam && typeof window.MediaRecorder !== "undefined" && navigator.mediaDevices) {
+      void listenSarvam();
+      return;
+    }
+    listenBrowser();
   }
 
   return (
@@ -170,6 +329,25 @@ export function SaathiApp() {
                   </div>
                 )}
                 {turn.answer && <SchemeCards answer={turn.answer} english={english} onDraft={(id) => { setDraftScheme(id); setTab("draft"); }} />}
+                {turn.updates && turn.updates.length > 0 && (
+                  <div className="updates">
+                    <h4>हाल की आधिकारिक जानकारी</h4>
+                    <p className="small">
+                      {english
+                        ? "The curated scheme record above is the primary source. These are extra official links."
+                        : "मुख्य स्रोत ऊपर दिया गया योजना रिकॉर्ड है। ये लिंक अतिरिक्त आधिकारिक पन्ने हैं।"}
+                    </p>
+                    <ul>
+                      {turn.updates.map((item) => (
+                        <li key={item.url}>
+                          <a href={item.url} target="_blank" rel="noreferrer">
+                            {item.title}
+                          </a>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               </article>
             ))}
           </div>

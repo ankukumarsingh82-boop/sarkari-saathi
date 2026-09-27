@@ -1,6 +1,7 @@
-import { answerQuestion } from "@/lib/engine";
-import { maybeRewrite } from "@/lib/llm";
+import { respondToMessage } from "@/lib/respond";
 import type { Profile } from "@/lib/types";
+
+export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
   let body: { message?: string; profile?: Profile };
@@ -9,8 +10,6 @@ export async function POST(request: Request) {
   } catch {
     return Response.json({ error: "JSON body expected." }, { status: 400 });
   }
-  const message = typeof body.message === "string" ? body.message.slice(0, 2000) : "";
-  const local = answerQuestion({ message, profile: body.profile });
-  const answer = await maybeRewrite(local, message);
+  const answer = await respondToMessage({ message: body.message, profile: body.profile });
   return Response.json(answer);
 }

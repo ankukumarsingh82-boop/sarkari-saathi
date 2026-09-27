@@ -3,6 +3,7 @@ node_modules
 .env
 .env.local
 .env*.local
+eval/results-llm.json
 .vercel
 *.log
 tsconfig.tsbuildinfo

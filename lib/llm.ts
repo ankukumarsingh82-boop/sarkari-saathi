@@ -1,19 +1,29 @@
 import type { Answer } from "./types";
 import { getScheme } from "./schemes";
+import { geminiGenerate, geminiConfigured } from "./gemini";
+import { fetchWithTimeout } from "./http";
+import { LOW_LINE_HI } from "./engine";
 
 export function activeModel(): "local" | "gemini" | "openai" {
-  if (process.env.GEMINI_API_KEY) return "gemini";
+  if (geminiConfigured()) return "gemini";
   if (process.env.OPENAI_API_KEY) return "openai";
   return "local";
 }
 
-export async function maybeRewrite(answer: Answer, message: string): Promise<Answer> {
+export async function maybeRewrite(
+  answer: Answer,
+  message: string,
+  options?: { timeoutMs?: number },
+): Promise<Answer> {
   const mode = activeModel();
   if (mode === "local") return answer;
   try {
-    const text = mode === "gemini" ? await gemini(answer, message) : await openai(answer, message);
+    const text = mode === "gemini" ? await geminiRewrite(answer, message, options?.timeoutMs) : await openai(answer, message, options?.timeoutMs);
     if (!text) return answer;
-    const withLinks = ensureCitations(text, answer);
+    let withLinks = ensureCitations(text, answer);
+    if (answer.lowConfidence && !withLinks.includes("पक्का नहीं")) {
+      withLinks = `${withLinks}\n\n${LOW_LINE_HI}`;
+    }
     return {
       ...answer,
       answerHi: withLinks,
@@ -40,6 +50,7 @@ function contextBlock(answer: Answer, message: string): string {
   });
   return [
     "You are Sarkari Saathi. Answer in simple spoken Hindi.",
+    "End each Hindi sentence with । and not a Latin full stop.",
     "Use ONLY the records below. Do not invent amounts, ages, or eligibility.",
     "Keep every official URL that belongs to a scheme you name.",
     "If the records are not enough, say you are not sure and tell the person to verify with the official helpline or office.",
@@ -54,38 +65,18 @@ function contextBlock(answer: Answer, message: string): string {
   ].join("\n");
 }
 
-async function gemini(answer: Answer, message: string): Promise<string | null> {
-  const model = process.env.GEMINI_MODEL || "gemini-2.0-flash";
-  const key = process.env.GEMINI_API_KEY as string;
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: AbortSignal.timeout(12000),
-      body: JSON.stringify({
-        contents: [{ role: "user", parts: [{ text: contextBlock(answer, message) }] }],
-        generationConfig: { temperature: 0.2, maxOutputTokens: 700 },
-      }),
-    },
-  );
-  if (!response.ok) return null;
-  const data = (await response.json()) as {
-    candidates?: { content?: { parts?: { text?: string }[] } }[];
-  };
-  const text = data.candidates?.[0]?.content?.parts?.map((part) => part.text ?? "").join("").trim();
-  return text || null;
+async function geminiRewrite(answer: Answer, message: string, timeoutMs = 12000): Promise<string | null> {
+  return geminiGenerate(contextBlock(answer, message), { timeoutMs, temperature: 0.2, maxOutputTokens: 1024 });
 }
 
-async function openai(answer: Answer, message: string): Promise<string | null> {
+async function openai(answer: Answer, message: string, timeoutMs = 12000): Promise<string | null> {
   const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+  const response = await fetchWithTimeout("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
     },
-    signal: AbortSignal.timeout(12000),
     body: JSON.stringify({
       model,
       temperature: 0.2,
@@ -94,8 +85,11 @@ async function openai(answer: Answer, message: string): Promise<string | null> {
         { role: "user", content: contextBlock(answer, message) },
       ],
     }),
-  });
-  if (!response.ok) return null;
+  }, timeoutMs);
+  if (!response.ok) {
+    await response.body?.cancel();
+    return null;
+  }
   const data = (await response.json()) as { choices?: { message?: { content?: string } }[] };
   return data.choices?.[0]?.message?.content?.trim() || null;
 }
