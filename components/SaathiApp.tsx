@@ -47,6 +47,10 @@ export function SaathiApp() {
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const recordTimer = useRef<number | null>(null);
   const playback = useRef(0);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const endClip = useRef<(() => void) | null>(null);
+  const micSerial = useRef(0);
+  const micLive = useRef(0);
   const [turns, setTurns] = useState<Turn[]>([
     {
       role: "bot",
@@ -139,6 +143,12 @@ export function SaathiApp() {
   function stopPlayback() {
     playback.current += 1;
     window.speechSynthesis?.cancel();
+    const audio = audioRef.current;
+    audioRef.current = null;
+    audio?.pause();
+    const finish = endClip.current;
+    endClip.current = null;
+    finish?.();
   }
 
   async function playSequence(audios: string[], token: number) {
@@ -148,10 +158,26 @@ export function SaathiApp() {
       const url = URL.createObjectURL(new Blob([bytes], { type: "audio/wav" }));
       try {
         await new Promise<void>((resolve, reject) => {
+          if (token !== playback.current) {
+            resolve();
+            return;
+          }
           const audio = new Audio(url);
-          audio.onended = () => resolve();
-          audio.onerror = () => reject(new Error("audio"));
-          void audio.play().catch(reject);
+          const finish = () => {
+            if (endClip.current === finish) endClip.current = null;
+            resolve();
+          };
+          audioRef.current = audio;
+          endClip.current = finish;
+          audio.onended = finish;
+          audio.onerror = () => {
+            if (endClip.current === finish) endClip.current = null;
+            reject(new Error("audio"));
+          };
+          void audio.play().catch((error: unknown) => {
+            if (token !== playback.current) finish();
+            else reject(error instanceof Error ? error : new Error("audio"));
+          });
         });
       } finally {
         URL.revokeObjectURL(url);
@@ -210,11 +236,21 @@ export function SaathiApp() {
   }
 
   async function listenSarvam() {
+    const epoch = ++micSerial.current;
+    micLive.current = epoch;
+    setListening(true);
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch {
+      if (micLive.current !== epoch) return;
+      micLive.current = 0;
+      setListening(false);
       listenBrowser();
+      return;
+    }
+    if (micLive.current !== epoch) {
+      stream.getTracks().forEach((track) => track.stop());
       return;
     }
     const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find((type) => MediaRecorder.isTypeSupported(type));
@@ -223,7 +259,14 @@ export function SaathiApp() {
       recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
     } catch {
       stream.getTracks().forEach((track) => track.stop());
+      if (micLive.current !== epoch) return;
+      micLive.current = 0;
+      setListening(false);
       listenBrowser();
+      return;
+    }
+    if (micLive.current !== epoch) {
+      stream.getTracks().forEach((track) => track.stop());
       return;
     }
     const chunks: Blob[] = [];
@@ -232,8 +275,12 @@ export function SaathiApp() {
     };
     recorder.onstop = () => {
       stream.getTracks().forEach((track) => track.stop());
-      if (recordTimer.current) window.clearTimeout(recordTimer.current);
-      setListening(false);
+      if (recorderRef.current !== recorder) return;
+      if (micLive.current === epoch) {
+        micLive.current = 0;
+        if (recordTimer.current) window.clearTimeout(recordTimer.current);
+        setListening(false);
+      }
       const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
       if (blob.size < 800) {
         setTurns((current) => [
@@ -245,7 +292,6 @@ export function SaathiApp() {
       void sendAudio(blob, recorder.mimeType || "audio/webm");
     };
     recorderRef.current = recorder;
-    setListening(true);
     recorder.start();
     recordTimer.current = window.setTimeout(() => {
       if (recorder.state === "recording") recorder.stop();
@@ -273,8 +319,10 @@ export function SaathiApp() {
   }
 
   function listen() {
-    if (listening) {
-      if (recorderRef.current?.state === "recording") recorderRef.current.stop();
+    if (listening || micLive.current !== 0) {
+      const recording = recorderRef.current?.state === "recording";
+      if (!recording) micLive.current = 0;
+      if (recording) recorderRef.current?.stop();
       recognitionRef.current?.stop();
       setListening(false);
       return;
