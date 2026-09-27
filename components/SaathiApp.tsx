@@ -49,6 +49,7 @@ export function SaathiApp() {
   const [sessionProfile, setSessionProfile] = useState<Profile>(EMPTY);
   const [profileReady, setProfileReady] = useState(false);
   const [draftScheme, setDraftScheme] = useState("pm-kisan");
+  const [draftEpoch, setDraftEpoch] = useState(0);
   const [text, setText] = useState("");
   const [listening, setListening] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -60,6 +61,7 @@ export function SaathiApp() {
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const recordTimer = useRef<number | null>(null);
   const playback = useRef(0);
+  const epoch = useRef(0);
   const formRef = useRef(formProfile);
   const sessionRef = useRef(sessionProfile);
   formRef.current = formProfile;
@@ -109,13 +111,20 @@ export function SaathiApp() {
   }
 
   function reset() {
+    epoch.current += 1;
+    if (recordTimer.current) {
+      window.clearTimeout(recordTimer.current);
+      recordTimer.current = null;
+    }
     if (recorderRef.current?.state === "recording") recorderRef.current.stop();
     recognitionRef.current?.stop();
     setListening(false);
+    setBusy(false);
     setFormProfile(EMPTY);
     setSessionProfile(EMPTY);
     setText("");
     setDraftScheme("pm-kisan");
+    setDraftEpoch((current) => current + 1);
     setTurns([{ role: "bot", text: GREETING }]);
     window.localStorage.removeItem(FORM_KEY);
     window.localStorage.removeItem("saathi-profile");
@@ -124,6 +133,7 @@ export function SaathiApp() {
   async function ask(message: string, profileOverride?: Profile) {
     const clean = message.trim();
     if (!clean || busy) return;
+    const generation = epoch.current;
     const profile = profileOverride ?? profileForTurn(clean, formRef.current, sessionRef.current);
     setText("");
     setTurns((current) => [...current, { role: "user", text: clean }]);
@@ -135,6 +145,7 @@ export function SaathiApp() {
         body: JSON.stringify({ message: clean, profile }),
       });
       const answer = (await response.json()) as Answer;
+      if (generation !== epoch.current) return;
       setSessionProfile(sessionAfterAnswer(formRef.current, answer.profile));
       if (answer.schemes[0]) setDraftScheme(answer.schemes[0].schemeId);
       setMode(answer.mode);
@@ -152,6 +163,7 @@ export function SaathiApp() {
         })
           .then((updateResponse) => (updateResponse.ok ? updateResponse.json() : null))
           .then((data: { updates?: UpdateLink[] } | null) => {
+            if (generation !== epoch.current) return;
             const updates = (data?.updates ?? []).filter((item) => item.url.startsWith("http")).slice(0, 3);
             if (!updates.length) return;
             setTurns((current) => current.map((turn) => (turn.id === id ? { ...turn, updates } : turn)));
@@ -159,6 +171,7 @@ export function SaathiApp() {
           .catch(() => undefined);
       }
     } catch {
+      if (generation !== epoch.current) return;
       setTurns((current) => [
         ...current,
         {
@@ -167,7 +180,7 @@ export function SaathiApp() {
         },
       ]);
     } finally {
-      setBusy(false);
+      if (generation === epoch.current) setBusy(false);
     }
   }
 
@@ -238,26 +251,40 @@ export function SaathiApp() {
     }
     const recognition = new Ctor();
     recognitionRef.current = recognition;
+    const generation = epoch.current;
     recognition.lang = "hi-IN";
     recognition.interimResults = false;
     recognition.continuous = false;
     setListening(true);
     recognition.onresult = (event) => {
+      if (generation !== epoch.current) return;
       const said = event.results[0]?.[0]?.transcript ?? "";
       setListening(false);
       if (said) void ask(said);
     };
-    recognition.onerror = () => setListening(false);
-    recognition.onend = () => setListening(false);
+    recognition.onerror = () => {
+      if (generation !== epoch.current) return;
+      setListening(false);
+    };
+    recognition.onend = () => {
+      if (generation !== epoch.current) return;
+      setListening(false);
+    };
     recognition.start();
   }
 
   async function listenSarvam() {
+    const generation = epoch.current;
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch {
+      if (generation !== epoch.current) return;
       listenBrowser();
+      return;
+    }
+    if (generation !== epoch.current) {
+      stream.getTracks().forEach((track) => track.stop());
       return;
     }
     const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find((type) => MediaRecorder.isTypeSupported(type));
@@ -275,6 +302,7 @@ export function SaathiApp() {
     };
     recorder.onstop = () => {
       stream.getTracks().forEach((track) => track.stop());
+      if (generation !== epoch.current) return;
       if (recordTimer.current) window.clearTimeout(recordTimer.current);
       setListening(false);
       const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
@@ -296,18 +324,20 @@ export function SaathiApp() {
   }
 
   async function sendAudio(blob: Blob, mime: string) {
+    const generation = epoch.current;
     const extension = mime.includes("mp4") ? "m4a" : "webm";
     const form = new FormData();
     form.append("file", blob, `speech.${extension}`);
     try {
       const response = await fetch("/api/speech/stt", { method: "POST", body: form });
       const data = (await response.json()) as { transcript?: string | null };
+      if (generation !== epoch.current) return;
       if (response.ok && data.transcript) {
         void ask(data.transcript);
         return;
       }
     } catch {
-      /* message below */
+      if (generation !== epoch.current) return;
     }
     setTurns((current) => [
       ...current,
@@ -439,7 +469,12 @@ export function SaathiApp() {
             <Browse english={english} onPick={(id) => { setDraftScheme(id); setTab("draft"); }} />
           )}
           {tab === "draft" && (
-            <FormDraft profile={mergeProfiles(formProfile, sessionProfile)} schemeId={draftScheme} onSchemeId={setDraftScheme} />
+            <FormDraft
+              key={draftEpoch}
+              profile={mergeProfiles(formProfile, sessionProfile)}
+              schemeId={draftScheme}
+              onSchemeId={setDraftScheme}
+            />
           )}
           {latest && tab !== "draft" && tab !== "schemes" && <Checklist answer={latest} english={english} />}
         </div>
